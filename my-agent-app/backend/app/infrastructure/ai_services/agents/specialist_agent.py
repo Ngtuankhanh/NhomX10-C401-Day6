@@ -7,16 +7,39 @@ Agent này KHÔNG giao tiếp trực tiếp với người dùng.
 from __future__ import annotations
 import json
 from pathlib import Path
-from typing import Any
+import re
+
+from langchain_openai import ChatOpenAI
+from langchain_core.messages import SystemMessage, HumanMessage
+from pydantic import SecretStr
 
 from app.application.interfaces import ITriageService
 from app.domain.entities import ClassificationResult, SpecialtyDefinition
 from app.shared.text_utils import normalize_text
+from app.config import settings
+from .prompts import Prompts
+
+def parse_json_from_llm(content: str | list) -> dict:
+    text = content if isinstance(content, str) else str(content[0])
+    text = text.strip()
+    match = re.search(r"```(?:json)?(.*?)```", text, re.DOTALL)
+    if match:
+        text = match.group(1).strip()
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return {}
+
 
 AMBIGUOUS_SINGLE_TOKEN_SYMPTOMS: frozenset[str] = frozenset({"ngay", "nam", "nu"})
 
 class SpecialistAgent(ITriageService):
-    """Implement của Agent B dùng Rule-based Knowledge Graph cho MVP.
+    """Implement của Agent B kết hợp LLM (gpt-4o-mini) và Knowledge Graph.
+    
+    Agent sử dụng 2 prompt chính từ prompt_agent.py:
+    - KG_EXTRACTION: Trích xuất triệu chứng, tuổi, giới tính thành Graph.
+    - DIAGNOSIS: Tổng hợp kết quả từ Graph local và đưa ra chẩn đoán, gợi ý chuyên khoa,
+      kèm theo các câu hỏi follow-up.
     
     Parameters
     ----------
@@ -45,6 +68,12 @@ class SpecialistAgent(ITriageService):
         self.symptom_display: dict[str, str] = {}
 
         self._load_kg(kg_path)
+        
+        self.llm = ChatOpenAI(
+            model="gpt-4o-mini",
+            temperature=0,
+            api_key=SecretStr(settings.openai_api_key) if settings.openai_api_key else None
+        )
 
         self.sorted_symptoms = sorted(
             self.symptom_to_diseases.keys(), key=lambda x: (-len(x), x)
@@ -96,34 +125,88 @@ class SpecialistAgent(ITriageService):
                 fallback_used=True,
             )
 
-        # Direct specialty mention
-        for s in self.specialties:
-            if s.normalized_name in normalized:
-                return ClassificationResult(
-                    speciality_id=s.speciality_id,
-                    speciality_name=s.speciality_name,
-                    description=f"Bạn nhắc tới {s.speciality_name}.",
-                    confidence=0.92,
-                    question=None,
-                    matched_symptoms=(),
-                    fallback_used=False,
-                )
-
-        # Symptom matching
-        matched_symptoms = [
-            p
-            for p in self.sorted_symptoms
-            if p not in AMBIGUOUS_SINGLE_TOKEN_SYMPTOMS and p in normalized
+        # 1. Trích xuất Knowledge Graph bằng LLM
+        kg_messages = [
+            SystemMessage(content=Prompts.KG_EXTRACTION),
+            HumanMessage(content=f"Văn bản: {raw_text}")
         ]
+        try:
+            kg_resp = self.llm.invoke(kg_messages)
+            kg_ext = parse_json_from_llm(kg_resp.content)
+        except Exception:
+            kg_ext = {"nodes": [], "context": {}}
 
-        scores: dict[int, float] = {}
-        for sym in matched_symptoms:
+        # 2. Gom nhóm các triệu chứng tìm thấy trong raw_text và kg_ext
+        ext_labels = [n.get("label", "").lower() for n in kg_ext.get("nodes", [])]
+        matched_symptoms = set()
+        
+        for sym in self.sorted_symptoms:
+            if sym in normalized and sym not in AMBIGUOUS_SINGLE_TOKEN_SYMPTOMS:
+                matched_symptoms.add(sym)
+                
+        for label in ext_labels:
+            norm_label = normalize_text(label)
+            if norm_label in self.symptom_to_diseases:
+                matched_symptoms.add(norm_label)
+
+        matched_symptoms_list = list(matched_symptoms)
+
+        # 3. Tính điểm các bệnh liên quan
+        scores: dict[str, float] = {}
+        for sym in matched_symptoms_list:
             for dis in self.symptom_to_diseases.get(sym, set()):
-                spec = self.disease_to_specialty.get(dis)
-                if spec:
-                    scores[spec.speciality_id] = scores.get(spec.speciality_id, 0.0) + 1.2
+                # Mỗi triệu chứng khớp cộng thêm 1.0 (có thể cộng thêm logic context_weight sau này)
+                scores[dis] = scores.get(dis, 0.0) + 1.0
 
-        if not scores:
+        top_diseases = []
+        for dis, score in sorted(scores.items(), key=lambda x: x[1], reverse=True)[:3]:
+            spec = self.disease_to_specialty.get(dis)
+            top_diseases.append({
+                "disease_name": dis,
+                "weighted_score": score,
+                "specialties_matched": [
+                    {
+                        "specialty_id": spec.speciality_id,
+                        "specialty_name": spec.speciality_name
+                    }
+                ] if spec else []
+            })
+            
+        # 4. Yêu cầu LLM chẩn đoán và chọn chuyên khoa
+        user_msg = {
+            "patient_input": raw_text,
+            "extracted_context": kg_ext.get("context", {}),
+            "matched_symptoms": matched_symptoms_list,
+            "top_diseases": top_diseases
+        }
+        diag_messages = [
+            SystemMessage(content=Prompts.DIAGNOSIS),
+            HumanMessage(content=json.dumps(user_msg, ensure_ascii=False, indent=2))
+        ]
+        try:
+            diag_resp = self.llm.invoke(diag_messages)
+            diag_data = parse_json_from_llm(diag_resp.content)
+        except Exception:
+            diag_data = {}
+
+        # 5. Fallback nếu LLM lỗi hoặc không có cấu trúc đúng
+        diagnoses = diag_data.get("diagnoses", [])
+        if not diagnoses:
+            # Fallback về rule-based cũ nếu LLM thất bại
+            if scores:
+                top_dis = max(scores, key=lambda k: scores[k])
+                spec = self.disease_to_specialty.get(top_dis)
+                if spec:
+                    return ClassificationResult(
+                        speciality_id=spec.speciality_id,
+                        speciality_name=spec.speciality_name,
+                        description=f"Dựa trên triệu chứng, bạn nên khám {spec.speciality_name}.",
+                        confidence=0.8,
+                        question=None,
+                        matched_symptoms=tuple(str(self.symptom_display.get(s, s)) for s in matched_symptoms_list[:3]),
+                        fallback_used=True,
+                    )
+                    
             return ClassificationResult(
                 speciality_id=None,
                 speciality_name="Chưa xác định",
@@ -134,20 +217,27 @@ class SpecialistAgent(ITriageService):
                 fallback_used=True,
             )
 
-        top_id = max(scores, key=lambda k: scores[k])
-        spec = self.specialty_by_id[top_id]
+        # 6. Chuẩn bị kết quả từ LLM
+        best_diag = diagnoses[0]
+        sp_id = best_diag.get("specialty_id")
+        # Đảm bảo logic nếu LLM trả về ID 0 là Đa khoa, ta map lại cho chuẩn DB (ví dụ ID 30)
+        # Trong thiết kế hiện tại ID đa khoa là 30
+        if sp_id == 0 or sp_id is None:
+            sp_id = 30
+        
+        questions = diag_data.get("follow_up_questions", [])
+        first_q = questions[0].get("question") if questions else ("Bạn có biểu hiện nào khác không?" if diag_data.get("needs_more_info") else None)
 
         return ClassificationResult(
-            speciality_id=spec.speciality_id,
-            speciality_name=spec.speciality_name,
-            description=f"Dựa trên triệu chứng, bạn nên khám {spec.speciality_name}.",
-            confidence=0.8,
-            question=None,
-            matched_symptoms=tuple(
-                self.symptom_display.get(s, s) for s in matched_symptoms[:3]
-            ),
+            speciality_id=sp_id,
+            speciality_name=best_diag.get("specialty_name", "Đa khoa"),
+            description=best_diag.get("cause") or best_diag.get("confidence_note") or "Dựa trên triệu chứng từ Knowledge Graph.",
+            confidence=float(diag_data.get("overall_confidence", best_diag.get("confidence", 0.5))),
+            question=first_q,
+            matched_symptoms=tuple(str(self.symptom_display.get(s, s)) for s in best_diag.get("matched_symptoms", [])[:3]),
             fallback_used=False,
         )
+
 
 from langchain_core.tools import tool
 

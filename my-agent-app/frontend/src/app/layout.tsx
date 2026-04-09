@@ -1,11 +1,13 @@
 import type { Metadata } from "next";
-import "./globals.css";
 import React from "react";
 import { NuqsAdapter } from "nuqs/adapters/next/app";
 
+import "./globals.css";
+
 export const metadata: Metadata = {
   title: "Medical Booking Assistant",
-  description: "Chatbot goi y chuyen khoa va ho tro dat lich kham",
+  description:
+    "Chatbot goi y chuyen khoa va ho tro dat lich kham voi giao dien tap trung vao luong hoi thoai AI",
 };
 
 export default function RootLayout({
@@ -15,7 +17,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="vi">
-      <body>
+      <body className="antialiased">
         <NuqsAdapter>{children}</NuqsAdapter>
       </body>
     </html>

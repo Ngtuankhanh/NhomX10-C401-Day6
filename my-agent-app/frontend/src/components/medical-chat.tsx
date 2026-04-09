@@ -1,26 +1,31 @@
 "use client";
 
-import { startTransition, useEffect, useMemo, useRef, useState } from "react";
+import {
+  startTransition,
+  useDeferredValue,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { AnimatePresence, motion } from "framer-motion";
 import {
   AlertTriangle,
+  ArrowUp,
   CalendarDays,
-  CheckCircle2,
-  CircleDotDashed,
-  ClipboardList,
+  ChevronDown,
   LoaderCircle,
-  MapPin,
+  Phone,
+  Plus,
   RefreshCw,
-  SendHorizontal,
-  ShieldAlert,
-  Stethoscope,
-  UserRound,
+  Search,
+  Sparkles,
+  X,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
-
 
 type ApiRole = "assistant" | "user";
 
@@ -101,12 +106,22 @@ type UiMessage = {
   content: string;
 };
 
-
 const BACKEND_URL =
   process.env.NEXT_PUBLIC_BACKEND_API_URL ||
   process.env.NEXT_PUBLIC_API_URL ||
   "http://localhost:2024";
 
+const VINMEC_HERO_IMAGE =
+  "https://www.vinmec.com/static/uploads/anh_1_moi_b612967dee.jpg";
+
+const UTILITY_LINKS = ["Tìm bác sĩ", "Chăm sóc khách hàng"];
+const NAV_ITEMS = [
+  "Chuyên khoa",
+  "Hướng dẫn khách hàng",
+  "Phát triển bền vững",
+  "Về Vinmec",
+  "Chuyên trang sức khỏe",
+];
 
 function buildMessageId(prefix: string) {
   return `${prefix}-${crypto.randomUUID()}`;
@@ -144,19 +159,6 @@ async function sendMessage(
   return response.json();
 }
 
-function statusTone(code: string) {
-  switch (code) {
-    case "recovering_from_error":
-      return "bg-amber-100 text-amber-900 border-amber-200";
-    case "waiting_for_otp":
-      return "bg-blue-100 text-blue-900 border-blue-200";
-    case "idle":
-      return "bg-emerald-100 text-emerald-900 border-emerald-200";
-    default:
-      return "bg-slate-100 text-slate-900 border-slate-200";
-  }
-}
-
 function pendingPlaceholder(pendingField: string | null) {
   switch (pendingField) {
     case "facility":
@@ -182,7 +184,7 @@ function pendingPlaceholder(pendingField: string | null) {
     case "otp_code":
       return "Nhập mã OTP 6 số";
     default:
-      return "Mô tả triệu chứng hoặc nhập phản hồi";
+      return "Hỏi Vinmec AI về triệu chứng hoặc lịch khám";
   }
 }
 
@@ -194,24 +196,38 @@ function summaryValue(value: string | number | null | undefined) {
 }
 
 function nextStepLabel(snapshot: Snapshot | null) {
-  if (!snapshot) return "Chờ phiên chat khởi tạo";
+  if (!snapshot) return "Đang khởi tạo tư vấn";
 
   const mapping: Record<string, string> = {
     facility: "Chọn cơ sở khám",
-    doctor: "Chọn bác sĩ",
+    doctor: "Chọn bác sĩ phụ trách",
     booking_date: "Chọn ngày khám",
-    booking_time: "Chọn giờ khám",
-    name: "Nhập họ tên",
+    booking_time: "Chọn khung giờ phù hợp",
+    name: "Nhập họ tên người khám",
     gender: "Chọn giới tính",
     phone_number: "Nhập số điện thoại",
     date_of_birth: "Nhập ngày sinh",
-    email: "Nhập email hoặc bỏ qua",
+    email: "Điền email hoặc bỏ qua",
     booking_confirmation: "Xác nhận thông tin",
-    otp_code: "Nhập OTP",
+    otp_code: "Nhập OTP để hoàn tất",
     follow_up_answer: "Trả lời câu hỏi bổ sung",
   };
 
   return mapping[snapshot.pending_field ?? ""] ?? "Mô tả triệu chứng";
+}
+
+function bookingSchedule(snapshot: Snapshot | null) {
+  const date = snapshot?.booking_context.booking_date;
+  const time = snapshot?.booking_context.booking_time;
+
+  if (!date && !time) return "Chưa có lịch hẹn";
+  if (date && time) return `${date} • ${time}`;
+  return date ?? time ?? "Chưa có lịch hẹn";
+}
+
+function formatConfidence(confidence: number | null | undefined) {
+  if (!confidence) return "Đang chờ";
+  return `${Math.round(confidence * 100)}%`;
 }
 
 function MessageBubble({ message }: { message: UiMessage }) {
@@ -219,17 +235,14 @@ function MessageBubble({ message }: { message: UiMessage }) {
 
   return (
     <div
-      className={cn(
-        "flex w-full",
-        isAssistant ? "justify-start" : "justify-end",
-      )}
+      className={cn("flex w-full", isAssistant ? "justify-start" : "justify-end")}
     >
       <div
         className={cn(
-          "max-w-[88%] rounded-3xl px-4 py-3 text-sm leading-7 shadow-sm whitespace-pre-wrap",
+          "max-w-[82%] whitespace-pre-wrap rounded-[28px] px-4 py-3 text-sm leading-7 shadow-[0_20px_50px_rgba(15,23,42,0.07)]",
           isAssistant
-            ? "bg-white text-slate-900 rounded-tl-md border border-slate-200"
-            : "bg-[linear-gradient(135deg,#0f766e,#115e59)] text-white rounded-tr-md",
+            ? "rounded-tl-sm border border-slate-200 bg-white text-slate-800"
+            : "rounded-tr-sm bg-[linear-gradient(135deg,#4b63ff,#7b8cff)] text-white",
         )}
       >
         {message.content}
@@ -238,210 +251,311 @@ function MessageBubble({ message }: { message: UiMessage }) {
   );
 }
 
-function SummaryPanel({
-  snapshot,
-  status,
+function VinmecLogo() {
+  return (
+    <div className="flex items-center gap-3">
+      <div className="relative flex h-14 w-14 items-center justify-center rounded-full bg-[radial-gradient(circle_at_35%_35%,#f8c36e,transparent_42%),radial-gradient(circle_at_55%_55%,#0f5caa,transparent_62%),linear-gradient(180deg,#f3c77f_0%,#b67b22_100%)] shadow-[0_12px_30px_rgba(17,88,155,0.18)]">
+        <div className="absolute h-8 w-8 rounded-full border border-white/40" />
+        <span className="text-xl font-semibold text-white">V</span>
+      </div>
+      <div className="leading-none">
+        <p className="text-[2rem] font-semibold tracking-[0.14em] text-[#195fae]">
+          VINMEC
+        </p>
+        <p className="mt-1 text-[10px] font-medium uppercase tracking-[0.26em] text-[#6e84a0]">
+          Healthcare system
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function FloatingDock({
+  isAssistantOpen,
+  onOpenAssistant,
 }: {
-  snapshot: Snapshot | null;
-  status: ChatStatus | null;
+  isAssistantOpen: boolean;
+  onOpenAssistant: () => void;
 }) {
-  const genderLabel =
-    snapshot?.patient_info.gender === 1
-      ? "Nam"
-      : snapshot?.patient_info.gender === 2
-        ? "Nữ"
-        : "Chưa có";
+  return (
+    <div
+      className={cn(
+        "fixed bottom-5 right-4 z-40 flex flex-col items-center gap-3 transition-all duration-500 md:bottom-8 md:right-7",
+        isAssistantOpen && "md:right-[28rem]",
+      )}
+    >
+      <button
+        type="button"
+        onClick={() => {
+          window.scrollTo({ top: 0, behavior: "smooth" });
+        }}
+        className="hidden size-14 items-center justify-center rounded-full border border-[#d6dde7] bg-white/92 text-[#7b8aa6] shadow-[0_18px_40px_rgba(15,23,42,0.09)] transition hover:-translate-y-1 hover:text-[#195fae] md:flex md:size-16"
+        aria-label="Lên đầu trang"
+      >
+        <ArrowUp className="size-5" />
+      </button>
+
+      <a
+        href="tel:1900232389"
+        className="hidden size-14 items-center justify-center rounded-full bg-[#43a67f] text-white shadow-[0_18px_40px_rgba(67,166,127,0.28)] transition hover:-translate-y-1 md:flex md:size-16"
+        aria-label="Gọi Vinmec"
+      >
+        <Phone className="size-5" />
+      </a>
+
+      <motion.button
+        type="button"
+        onClick={onOpenAssistant}
+        whileHover={{ y: -4, scale: 1.03 }}
+        whileTap={{ scale: 0.97 }}
+        className="group relative flex size-14 items-center justify-center overflow-hidden rounded-full border border-white/55 bg-[linear-gradient(135deg,#5873ff_0%,#7ea0ff_55%,#aec5ff_100%)] text-white shadow-[0_24px_60px_rgba(88,115,255,0.35)] backdrop-blur md:size-16"
+        aria-label={isAssistantOpen ? "Thu gọn Vinmec AI" : "Mở Vinmec AI"}
+      >
+        <motion.span
+          aria-hidden
+          className="absolute inset-y-0 left-[-35%] w-10 bg-white/28 blur-xl"
+          animate={{ x: ["0%", "220%", "0%"] }}
+          transition={{
+            duration: 3.2,
+            repeat: Number.POSITIVE_INFINITY,
+            ease: "easeInOut",
+          }}
+        />
+        <span className="relative flex size-10 items-center justify-center rounded-full bg-white/16 md:size-11">
+          <Sparkles className="size-5" />
+          <motion.span
+            className="absolute inset-0 rounded-full border border-white/35"
+            animate={{ scale: [1, 1.35, 1], opacity: [0.7, 0, 0.7] }}
+            transition={{ duration: 2.2, repeat: Number.POSITIVE_INFINITY }}
+          />
+        </span>
+      </motion.button>
+    </div>
+  );
+}
+
+function AssistantPanel({
+  open,
+  onClose,
+  messages,
+  input,
+  onInputChange,
+  onSend,
+  isPending,
+  loadingLabel,
+  sessionId,
+  quickReplies,
+  pendingField,
+  bootstrapError,
+  onRestart,
+}: {
+  open: boolean;
+  onClose: () => void;
+  messages: UiMessage[];
+  input: string;
+  onInputChange: (value: string) => void;
+  onSend: (rawValue?: string) => Promise<void>;
+  isPending: boolean;
+  loadingLabel: string;
+  sessionId: string | null;
+  quickReplies: string[];
+  pendingField: string | null;
+  bootstrapError: string | null;
+  onRestart: () => Promise<void>;
+}) {
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const hasUserMessage = messages.some((message) => message.role === "user");
+  const welcomeMessage = messages[0]?.content;
+
+  useEffect(() => {
+    if (!open) return;
+
+    scrollRef.current?.scrollTo({
+      top: scrollRef.current.scrollHeight,
+      behavior: "smooth",
+    });
+  }, [messages, isPending, open]);
+
+  useEffect(() => {
+    if (!open) return;
+
+    const timeout = window.setTimeout(() => {
+      inputRef.current?.focus();
+    }, 180);
+
+    return () => window.clearTimeout(timeout);
+  }, [open]);
 
   return (
-    <div className="flex flex-col gap-4">
-      <Card className="border-white/70 bg-white/80 shadow-[0_24px_80px_rgba(15,23,42,0.08)] backdrop-blur">
-        <CardHeader className="pb-4">
-          <CardTitle className="flex items-center gap-2 text-base text-slate-950">
-            <CircleDotDashed className="size-4 text-teal-700" />
-            Trạng thái phiên
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3 text-sm text-slate-700">
-          <div
-            className={cn(
-              "inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-medium",
-              statusTone(status?.code ?? "idle"),
-            )}
+    <AnimatePresence>
+      {open ? (
+        <>
+          <motion.button
+            type="button"
+            aria-label="Đóng trợ lý"
+            className="fixed inset-0 z-40 bg-[#0c4582]/18 backdrop-blur-[2px]"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={onClose}
+          />
+
+          <motion.aside
+            initial={{ x: "100%" }}
+            animate={{ x: 0 }}
+            exit={{ x: "100%" }}
+            transition={{ type: "spring", stiffness: 270, damping: 28 }}
+            className="fixed inset-y-0 right-0 z-50 flex w-full max-w-[430px] flex-col border-l border-slate-200 bg-white shadow-[-18px_0_60px_rgba(15,23,42,0.18)]"
           >
-            <span className="size-2 rounded-full bg-current opacity-80" />
-            {status?.label ?? "Sẵn sàng hỗ trợ"}
-          </div>
-          <div className="rounded-2xl bg-slate-50 px-4 py-3">
-            <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
-              Bước kế tiếp
-            </p>
-            <p className="mt-2 font-medium text-slate-900">
-              {nextStepLabel(snapshot)}
-            </p>
-          </div>
-          <div className="rounded-2xl bg-amber-50 px-4 py-3 text-amber-950">
-            <div className="flex items-start gap-3">
-              <ShieldAlert className="mt-0.5 size-4 shrink-0" />
-              <p className="text-sm leading-6">
-                Chatbot chỉ gợi ý chuyên khoa và hỗ trợ đặt lịch, không thay thế
-                chẩn đoán của bác sĩ.
-              </p>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
+            <div className="h-1.5 bg-[linear-gradient(90deg,#161616_0%,#5e73ff_36%,#96adff_100%)]" />
 
-      <Card className="border-white/70 bg-white/80 shadow-[0_24px_80px_rgba(15,23,42,0.08)] backdrop-blur">
-        <CardHeader className="pb-4">
-          <CardTitle className="flex items-center gap-2 text-base text-slate-950">
-            <Stethoscope className="size-4 text-teal-700" />
-            Gợi ý chuyên khoa
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3 text-sm text-slate-700">
-          <div className="rounded-2xl bg-slate-50 px-4 py-3">
-            <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
-              Chuyên khoa
-            </p>
-            <p className="mt-2 font-medium text-slate-950">
-              {summaryValue(snapshot?.specialty_assessment.speciality_name)}
-            </p>
-          </div>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <div className="rounded-2xl bg-slate-50 px-4 py-3">
-              <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
-                Độ tin cậy
-              </p>
-              <p className="mt-2 font-medium text-slate-950">
-                {snapshot?.specialty_assessment.confidence
-                  ? `${Math.round(
-                      snapshot.specialty_assessment.confidence * 100,
-                    )}%`
-                  : "Chưa có"}
-              </p>
-            </div>
-            <div className="rounded-2xl bg-slate-50 px-4 py-3">
-              <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
-                Agent B
-              </p>
-              <p className="mt-2 font-medium text-slate-950">
-                {snapshot?.specialty_assessment.agent_b_status === "fallback"
-                  ? "Placeholder, đang dùng fallback"
-                  : "Chưa chạy"}
-              </p>
-            </div>
-          </div>
-          <div className="rounded-2xl bg-slate-50 px-4 py-3">
-            <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
-              Tóm tắt triệu chứng
-            </p>
-            <p className="mt-2 leading-6 text-slate-900">
-              {summaryValue(snapshot?.symptom_summary)}
-            </p>
-          </div>
-        </CardContent>
-      </Card>
-
-      <Card className="border-white/70 bg-white/80 shadow-[0_24px_80px_rgba(15,23,42,0.08)] backdrop-blur">
-        <CardHeader className="pb-4">
-          <CardTitle className="flex items-center gap-2 text-base text-slate-950">
-            <CalendarDays className="size-4 text-teal-700" />
-            Tiến độ đặt lịch
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3 text-sm text-slate-700">
-          <div className="grid gap-3">
-            <div className="rounded-2xl bg-slate-50 px-4 py-3">
-              <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
-                Cơ sở
-              </p>
-              <p className="mt-2 text-slate-950">
-                {summaryValue(snapshot?.booking_context.facility_name)}
-              </p>
-            </div>
-            <div className="rounded-2xl bg-slate-50 px-4 py-3">
-              <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
-                Bác sĩ
-              </p>
-              <p className="mt-2 text-slate-950">
-                {summaryValue(snapshot?.booking_context.doctor_name)}
-              </p>
-            </div>
-            <div className="grid gap-3 sm:grid-cols-2">
-              <div className="rounded-2xl bg-slate-50 px-4 py-3">
-                <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
-                  Ngày khám
-                </p>
-                <p className="mt-2 text-slate-950">
-                  {summaryValue(snapshot?.booking_context.booking_date)}
-                </p>
+            <div className="flex items-center justify-between px-5 pb-4 pt-5">
+              <div className="flex items-center gap-3">
+                <span className="flex size-11 items-center justify-center rounded-full bg-[linear-gradient(135deg,#5e73ff,#a8b9ff)] text-white shadow-[0_14px_35px_rgba(94,115,255,0.28)]">
+                  <Sparkles className="size-4" />
+                </span>
+                <div>
+                  <p className="text-lg font-semibold tracking-tight text-[#7288ff]">
+                    VinmecAI
+                  </p>
+                  <p className="text-xs text-slate-400">
+                    {sessionId ? `Session ${sessionId.slice(0, 8)}` : "Đang kết nối"}
+                  </p>
+                </div>
               </div>
-              <div className="rounded-2xl bg-slate-50 px-4 py-3">
-                <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
-                  Giờ khám
-                </p>
-                <p className="mt-2 text-slate-950">
-                  {summaryValue(snapshot?.booking_context.booking_time)}
-                </p>
-              </div>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
 
-      <Card className="border-white/70 bg-white/80 shadow-[0_24px_80px_rgba(15,23,42,0.08)] backdrop-blur">
-        <CardHeader className="pb-4">
-          <CardTitle className="flex items-center gap-2 text-base text-slate-950">
-            <UserRound className="size-4 text-teal-700" />
-            Thông tin người khám
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3 text-sm text-slate-700">
-          <div className="grid gap-3 sm:grid-cols-2">
-            <div className="rounded-2xl bg-slate-50 px-4 py-3">
-              <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
-                Họ tên
-              </p>
-              <p className="mt-2 text-slate-950">
-                {summaryValue(snapshot?.patient_info.name)}
-              </p>
+              <button
+                type="button"
+                onClick={onClose}
+                className="rounded-full p-2 text-slate-500 transition hover:bg-slate-100 hover:text-slate-900"
+                aria-label="Đóng"
+              >
+                <X className="size-4" />
+              </button>
             </div>
-            <div className="rounded-2xl bg-slate-50 px-4 py-3">
-              <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
-                Giới tính
-              </p>
-              <p className="mt-2 text-slate-950">{genderLabel}</p>
-            </div>
-          </div>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <div className="rounded-2xl bg-slate-50 px-4 py-3">
-              <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
-                Số điện thoại
-              </p>
-              <p className="mt-2 text-slate-950">
-                {summaryValue(snapshot?.patient_info.phone_number)}
-              </p>
-            </div>
-            <div className="rounded-2xl bg-slate-50 px-4 py-3">
-              <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
-                Ngày sinh
-              </p>
-              <p className="mt-2 text-slate-950">
-                {summaryValue(snapshot?.patient_info.date_of_birth)}
-              </p>
-            </div>
-          </div>
-          <div className="rounded-2xl bg-slate-50 px-4 py-3">
-            <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
-              Email
-            </p>
-            <p className="mt-2 text-slate-950">
-              {summaryValue(snapshot?.patient_info.email)}
-            </p>
-          </div>
-        </CardContent>
-      </Card>
-    </div>
+
+            {bootstrapError ? (
+              <div className="flex flex-1 flex-col items-center justify-center px-8 text-center">
+                <AlertTriangle className="size-8 text-rose-600" />
+                <h2 className="mt-5 text-2xl font-semibold text-slate-950">
+                  Không thể kết nối
+                </h2>
+                <p className="mt-3 text-sm leading-7 text-slate-500">
+                  {bootstrapError}
+                </p>
+                <Button
+                  type="button"
+                  onClick={() => {
+                    void onRestart();
+                  }}
+                  className="mt-6 rounded-full bg-[#5f74ff] px-5 text-white hover:bg-[#4e64f2]"
+                >
+                  <RefreshCw className="size-4" />
+                  Thử lại
+                </Button>
+              </div>
+            ) : (
+              <>
+                <div className="flex-1 overflow-hidden">
+                  {hasUserMessage ? (
+                    <div
+                      ref={scrollRef}
+                      className="flex h-full flex-col gap-4 overflow-y-auto px-5 py-5"
+                    >
+                      {messages.map((message) => (
+                        <MessageBubble key={message.id} message={message} />
+                      ))}
+
+                      {isPending ? (
+                        <div className="flex justify-start">
+                          <div className="inline-flex items-center gap-3 rounded-full border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600 shadow-[0_14px_35px_rgba(15,23,42,0.08)]">
+                            <LoaderCircle className="size-4 animate-spin text-[#6176ff]" />
+                            {loadingLabel}
+                          </div>
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : (
+                    <div className="flex h-full flex-col items-center justify-center px-8 text-center">
+                      <div className="max-w-sm">
+                        <p className="text-[2.15rem] font-semibold tracking-tight text-slate-950">
+                          Mình có thể giúp gì cho bạn hôm nay?
+                        </p>
+                        <p className="mt-4 text-sm leading-7 text-slate-500">
+                          {welcomeMessage ??
+                            "Bạn có thể hỏi về triệu chứng, chuyên khoa phù hợp hoặc lịch khám tại Vinmec."}
+                        </p>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <div className="border-t border-slate-100 px-5 pb-5 pt-4">
+                  {quickReplies.length ? (
+                    <div className="mb-4 flex gap-2 overflow-x-auto pb-1">
+                      {quickReplies.map((reply) => (
+                        <button
+                          key={reply}
+                          type="button"
+                          onClick={() => {
+                            void onSend(reply);
+                          }}
+                          disabled={isPending}
+                          className="shrink-0 rounded-full border border-slate-200 bg-slate-50 px-4 py-2 text-sm text-slate-600 transition hover:border-[#7b8cff] hover:text-slate-950"
+                        >
+                          {reply}
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+
+                  <form
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      void onSend();
+                    }}
+                    className="rounded-[2rem] border border-slate-200 bg-white px-3 py-2 shadow-[0_18px_40px_rgba(15,23,42,0.05)]"
+                  >
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        className="flex size-10 items-center justify-center rounded-full text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
+                        aria-label="Mở thêm tùy chọn"
+                      >
+                        <Plus className="size-5" />
+                      </button>
+
+                      <Input
+                        ref={inputRef}
+                        value={input}
+                        onChange={(event) => onInputChange(event.target.value)}
+                        placeholder={pendingPlaceholder(pendingField)}
+                        disabled={isPending || !sessionId}
+                        className="h-12 border-0 bg-transparent px-0 text-base text-slate-950 shadow-none focus-visible:ring-0"
+                      />
+
+                      <button
+                        type="submit"
+                        disabled={isPending || !sessionId || !input.trim()}
+                        className="flex size-10 items-center justify-center rounded-full bg-slate-100 text-slate-500 transition hover:bg-[#6579ff] hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                        aria-label="Gửi"
+                      >
+                        <ArrowUp className="size-4" />
+                      </button>
+                    </div>
+                  </form>
+
+                  <p className="mt-3 text-center text-xs leading-6 text-slate-400">
+                    VinmecAI có thể mắc lỗi. Hãy kiểm tra lại thông tin quan trọng.
+                  </p>
+                </div>
+              </>
+            )}
+          </motion.aside>
+        </>
+      ) : null}
+    </AnimatePresence>
   );
 }
 
@@ -454,9 +568,10 @@ export function MedicalChat() {
   const [input, setInput] = useState("");
   const [isPending, setIsPending] = useState(false);
   const [bootstrapError, setBootstrapError] = useState<string | null>(null);
-  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const [isAssistantOpen, setIsAssistantOpen] = useState(false);
 
-  const deferredQuickReplies = useMemo(() => quickReplies.slice(0, 6), [quickReplies]);
+  const deferredQuickReplies = useDeferredValue(quickReplies);
+  const visibleQuickReplies = deferredQuickReplies.slice(0, 5);
 
   useEffect(() => {
     let cancelled = false;
@@ -488,13 +603,6 @@ export function MedicalChat() {
       cancelled = true;
     };
   }, []);
-
-  useEffect(() => {
-    scrollRef.current?.scrollTo({
-      top: scrollRef.current.scrollHeight,
-      behavior: "smooth",
-    });
-  }, [messages, isPending]);
 
   const loadingLabel = useMemo(() => {
     if (!snapshot) return "Đang khởi tạo phiên chat...";
@@ -595,177 +703,99 @@ export function MedicalChat() {
   };
 
   return (
-    <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,#d8f3f0,transparent_26%),radial-gradient(circle_at_bottom_right,#fde68a,transparent_24%),linear-gradient(180deg,#f8fafc_0%,#eef6f5_100%)] px-4 py-6 text-slate-950 md:px-6 lg:px-8">
-      <div className="mx-auto flex max-w-7xl flex-col gap-6">
-        <section className="grid gap-6 lg:grid-cols-[1.45fr_0.8fr]">
-          <Card className="overflow-hidden border-white/70 bg-white/85 shadow-[0_30px_120px_rgba(15,23,42,0.10)] backdrop-blur">
-            <CardHeader className="border-b border-slate-200/80 bg-[linear-gradient(135deg,#f7fffe,#eef8f6)] pb-5">
-              <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
-                <div className="space-y-3">
-                  <div className="inline-flex items-center gap-2 rounded-full border border-teal-200 bg-teal-50 px-3 py-1 text-xs font-medium uppercase tracking-[0.24em] text-teal-900">
-                    <Stethoscope className="size-3.5" />
-                    Trợ lý đặt lịch y tế
-                  </div>
-                  <div>
-                    <h1 className="max-w-2xl text-2xl font-semibold tracking-tight text-slate-950 md:text-3xl">
-                      Chatbot gợi ý chuyên khoa và hỗ trợ đặt lịch khám
-                    </h1>
-                    <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-600 md:text-base">
-                      Luồng hiện tại đã triển khai toàn bộ FE và Agent A. Agent B
-                      đang ở chế độ placeholder nên hệ thống sẽ tự fallback sang
-                      bộ phân loại dựa trên dữ liệu tri thức trong backend.
-                    </p>
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-3">
-                  <div
-                    className={cn(
-                      "inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-medium",
-                      statusTone(status?.code ?? "idle"),
-                    )}
-                  >
-                    <span className="size-2 rounded-full bg-current opacity-80" />
-                    {status?.label ?? "Đang sẵn sàng"}
-                  </div>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="rounded-full"
-                    onClick={handleRestart}
-                    disabled={isPending}
-                  >
-                    <RefreshCw className="size-4" />
-                    Phiên mới
-                  </Button>
-                </div>
-              </div>
-            </CardHeader>
-
-            <CardContent className="p-0">
-              {bootstrapError ? (
-                <div className="flex min-h-[640px] items-center justify-center p-8">
-                  <div className="max-w-md rounded-3xl border border-rose-200 bg-rose-50 p-6 text-center text-rose-950">
-                    <AlertTriangle className="mx-auto size-8" />
-                    <h2 className="mt-4 text-lg font-semibold">Không thể kết nối backend</h2>
-                    <p className="mt-2 text-sm leading-6">{bootstrapError}</p>
-                    <Button className="mt-5 rounded-full" onClick={handleRestart}>
-                      Thử lại
-                    </Button>
-                  </div>
-                </div>
-              ) : (
-                <div className="grid min-h-[640px] grid-rows-[1fr_auto]">
-                  <div
-                    ref={scrollRef}
-                    className="space-y-4 overflow-y-auto px-4 py-5 md:px-6"
-                  >
-                    {messages.map((message) => (
-                      <MessageBubble key={message.id} message={message} />
-                    ))}
-
-                    {isPending ? (
-                      <div className="flex justify-start">
-                        <div className="inline-flex items-center gap-3 rounded-3xl rounded-tl-md border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 shadow-sm">
-                          <LoaderCircle className="size-4 animate-spin text-teal-700" />
-                          {loadingLabel}
-                        </div>
-                      </div>
-                    ) : null}
-                  </div>
-
-                  <div className="border-t border-slate-200/80 bg-white/90 px-4 py-4 md:px-6">
-                    {deferredQuickReplies.length ? (
-                      <div className="mb-4 flex flex-wrap gap-2">
-                        {deferredQuickReplies.map((reply) => (
-                          <button
-                            key={reply}
-                            type="button"
-                            className="rounded-full border border-slate-200 bg-slate-50 px-3 py-2 text-left text-sm text-slate-700 transition hover:border-teal-300 hover:bg-teal-50 hover:text-teal-950"
-                            onClick={() => {
-                              void handleSend(reply);
-                            }}
-                            disabled={isPending}
-                          >
-                            {reply}
-                          </button>
-                        ))}
-                      </div>
-                    ) : null}
-
-                    <form
-                      className="flex flex-col gap-3 md:flex-row"
-                      onSubmit={(event) => {
-                        event.preventDefault();
-                        void handleSend();
-                      }}
-                    >
-                      <Input
-                        value={input}
-                        onChange={(event) => setInput(event.target.value)}
-                        placeholder={pendingPlaceholder(snapshot?.pending_field ?? null)}
-                        className="h-12 rounded-full border-slate-200 bg-slate-50 px-5"
-                        disabled={isPending || !sessionId}
-                      />
-                      <Button
-                        type="submit"
-                        className="h-12 rounded-full bg-[linear-gradient(135deg,#0f766e,#115e59)] px-5 text-white hover:opacity-95"
-                        disabled={isPending || !sessionId || !input.trim()}
-                      >
-                        <SendHorizontal className="size-4" />
-                        Gửi
-                      </Button>
-                    </form>
-                  </div>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-
-          <SummaryPanel snapshot={snapshot} status={status} />
+    <>
+      <main className="min-h-[100dvh] bg-[#f7fafc] text-slate-900">
+        <section className="bg-[linear-gradient(90deg,#1169a8_0%,#2478b6_52%,#3d88bf_100%)] text-white">
+          <div className="mx-auto flex max-w-[1440px] items-center justify-end gap-8 px-4 py-3 text-sm md:px-6 lg:px-8">
+            {UTILITY_LINKS.map((item) => (
+              <a
+                key={item}
+                href="#"
+                className="transition hover:text-white/80"
+              >
+                {item}
+              </a>
+            ))}
+          </div>
         </section>
 
-        <section className="grid gap-4 md:grid-cols-3">
-          <Card className="border-white/70 bg-white/80 shadow-[0_24px_80px_rgba(15,23,42,0.08)] backdrop-blur">
-            <CardContent className="flex items-start gap-4 p-5">
-              <MapPin className="mt-1 size-5 text-teal-700" />
-              <div>
-                <p className="text-sm font-semibold text-slate-950">Flow booking theo từng bước</p>
-                <p className="mt-2 text-sm leading-6 text-slate-600">
-                  Agent A sẽ hỏi lần lượt cơ sở, bác sĩ, ngày, giờ rồi mới sang
-                  phần thông tin người khám để giảm lỗi dữ liệu.
-                </p>
-              </div>
-            </CardContent>
-          </Card>
+        <header className="border-b border-[#dbe7ef] bg-white/96 backdrop-blur">
+          <div className="mx-auto flex max-w-[1440px] flex-col gap-4 px-4 py-4 md:px-6 lg:px-8">
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-center">
+              <VinmecLogo />
 
-          <Card className="border-white/70 bg-white/80 shadow-[0_24px_80px_rgba(15,23,42,0.08)] backdrop-blur">
-            <CardContent className="flex items-start gap-4 p-5">
-              <ClipboardList className="mt-1 size-5 text-teal-700" />
-              <div>
-                <p className="text-sm font-semibold text-slate-950">Fallback rõ ràng</p>
-                <p className="mt-2 text-sm leading-6 text-slate-600">
-                  Nếu Agent B chưa sẵn sàng, hệ thống vẫn phân loại bằng dữ liệu
-                  nội bộ và hiển thị trạng thái fallback rõ ràng trong UI.
-                </p>
-              </div>
-            </CardContent>
-          </Card>
+              <div className="flex flex-1 items-center justify-end gap-3">
+                <div className="hidden min-w-[320px] max-w-[460px] flex-1 items-center gap-3 rounded-2xl border border-[#d5e1eb] px-4 py-3 text-slate-400 lg:flex">
+                  <Search className="size-5 text-[#2b6fbe]" />
+                  <span className="text-lg text-slate-400">Tìm kiếm...</span>
+                </div>
 
-          <Card className="border-white/70 bg-white/80 shadow-[0_24px_80px_rgba(15,23,42,0.08)] backdrop-blur">
-            <CardContent className="flex items-start gap-4 p-5">
-              <CheckCircle2 className="mt-1 size-5 text-teal-700" />
-              <div>
-                <p className="text-sm font-semibold text-slate-950">OTP demo để test end-to-end</p>
-                <p className="mt-2 text-sm leading-6 text-slate-600">
-                  Booking đang ở chế độ mock an toàn. Bạn có thể dùng OTP mẫu
-                  `123456` để đi xuyên suốt toàn bộ flow FE và Agent A.
-                </p>
+                <button
+                  type="button"
+                  className="flex size-11 items-center justify-center rounded-2xl border border-[#d5e1eb] text-[#2b6fbe]"
+                  aria-label="Lịch"
+                >
+                  <CalendarDays className="size-5" />
+                </button>
+
+                <button
+                  type="button"
+                  className="flex h-11 items-center gap-2 rounded-2xl border border-[#d5e1eb] px-3 text-sm text-slate-600"
+                >
+                  <span className="text-lg">VN</span>
+                  <ChevronDown className="size-4 text-slate-400" />
+                </button>
               </div>
-            </CardContent>
-          </Card>
+            </div>
+
+            <nav className="hidden items-center justify-center gap-10 border-t border-[#edf2f6] pt-5 text-[1.05rem] text-slate-700 lg:flex">
+              {NAV_ITEMS.map((item) => (
+                <a key={item} href="#" className="transition hover:text-[#1d63af]">
+                  {item}
+                </a>
+              ))}
+            </nav>
+          </div>
+        </header>
+
+        <section className="mx-auto max-w-[1440px] px-4 pb-16 pt-8 md:px-6 lg:px-8">
+          <div className="relative min-h-[760px] overflow-hidden rounded-[30px] bg-white">
+            <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(182,207,233,0.3),transparent_24%),radial-gradient(circle_at_bottom_right,rgba(211,230,221,0.28),transparent_22%)]" />
+            <div className="pointer-events-none absolute left-7 top-20 hidden size-12 rounded-full bg-[#edf4fb] shadow-[0_0_0_14px_rgba(237,244,251,0.45)] lg:block" />
+            <div className="pointer-events-none absolute right-12 top-14 hidden h-28 w-28 rounded-full border-[18px] border-[#eff5d8] opacity-70 lg:block" />
+            <div className="pointer-events-none absolute bottom-10 left-10 hidden h-24 w-24 rounded-full bg-[#eef6d8]/75 blur-2xl lg:block" />
+
+            <div className="relative flex min-h-[760px] items-start justify-center px-4 pt-8 md:px-6">
+              <img
+                src={VINMEC_HERO_IMAGE}
+                alt="Vinmec campaign collage"
+                className="w-full max-w-[1120px] object-contain"
+              />
+            </div>
+          </div>
         </section>
-      </div>
-    </div>
+      </main>
+
+      <FloatingDock
+        isAssistantOpen={isAssistantOpen}
+        onOpenAssistant={() => setIsAssistantOpen((prev) => !prev)}
+      />
+
+      <AssistantPanel
+        open={isAssistantOpen}
+        onClose={() => setIsAssistantOpen(false)}
+        messages={messages}
+        input={input}
+        onInputChange={setInput}
+        onSend={handleSend}
+        isPending={isPending}
+        loadingLabel={loadingLabel}
+        sessionId={sessionId}
+        quickReplies={visibleQuickReplies}
+        pendingField={snapshot?.pending_field ?? null}
+        bootstrapError={bootstrapError}
+        onRestart={handleRestart}
+      />
+    </>
   );
 }
