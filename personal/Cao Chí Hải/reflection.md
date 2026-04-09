@@ -54,7 +54,3 @@ Tôi sẽ **thu thập và chuẩn hóa dữ liệu từ nhiều nguồn song so
 - **AI giúp:** Claude & GPT-4o hỗ trợ rất tốt trong việc viết Scrapy Spider, thiết kế schema KG chi tiết (Node & Relation types), generate prompt extraction chuyên sâu, và đặc biệt là gợi ý các edge case triệu chứng cũng như cách thiết kế fallback mechanism khi LLM không trả về kết quả.
 
 - **AI sai/nhiễu:** Khi yêu cầu generate code cho Agent Pipeline phức tạp, AI hay đưa ra thiết kế quá phức tạp (thêm quá nhiều layer, graph không cần thiết). Tôi phải tinh chỉnh nhiều lần để giữ cho pipeline vẫn đơn giản, dễ debug và phù hợp với thời gian hackathon. Bài học: AI giỏi gợi ý ý tưởng nhưng vẫn cần con người kiểm soát chặt chẽ scope và độ phức tạp thực tế.
-
----
-
-*Tài liệu này được tạo ngày 09/04/2026.*
