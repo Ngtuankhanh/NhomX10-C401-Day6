@@ -4,6 +4,7 @@ import {
   startTransition,
   useDeferredValue,
   useEffect,
+  type KeyboardEvent,
   useMemo,
   useRef,
   useState,
@@ -24,7 +25,7 @@ import {
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 
 type ApiRole = "assistant" | "user";
@@ -364,9 +365,24 @@ function AssistantPanel({
   onRestart: () => Promise<void>;
 }) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
-  const inputRef = useRef<HTMLInputElement | null>(null);
+  const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const hasUserMessage = messages.some((message) => message.role === "user");
   const welcomeMessage = messages[0]?.content;
+
+  const handleComposerKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key !== "Enter" || event.nativeEvent.isComposing) {
+      return;
+    }
+
+    if (event.ctrlKey || event.metaKey) {
+      return;
+    }
+
+    event.preventDefault();
+    if (!isPending && sessionId && input.trim()) {
+      void onSend();
+    }
+  };
 
   useEffect(() => {
     if (!open) return;
@@ -526,13 +542,15 @@ function AssistantPanel({
                         <Plus className="size-5" />
                       </button>
 
-                      <Input
+                      <Textarea
                         ref={inputRef}
                         value={input}
                         onChange={(event) => onInputChange(event.target.value)}
+                        onKeyDown={handleComposerKeyDown}
                         placeholder={pendingPlaceholder(pendingField)}
                         disabled={isPending || !sessionId}
-                        className="h-12 border-0 bg-transparent px-0 text-base text-slate-950 shadow-none focus-visible:ring-0"
+                        rows={1}
+                        className="max-h-36 min-h-[3rem] resize-none border-0 bg-transparent px-0 py-3 text-base leading-6 text-slate-950 shadow-none focus-visible:ring-0"
                       />
 
                       <button
@@ -547,7 +565,7 @@ function AssistantPanel({
                   </form>
 
                   <p className="mt-3 text-center text-xs leading-6 text-slate-400">
-                    VinmecAI có thể mắc lỗi. Hãy kiểm tra lại thông tin quan trọng.
+                    Enter để gửi, Ctrl+Enter hoặc Cmd+Enter để xuống dòng. VinmecAI có thể mắc lỗi. Hãy kiểm tra lại thông tin quan trọng.
                   </p>
                 </div>
               </>

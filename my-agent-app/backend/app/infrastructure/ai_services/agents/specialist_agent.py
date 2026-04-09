@@ -12,6 +12,7 @@ import re
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
 from pydantic import SecretStr
+from langgraph.prebuilt import ToolRuntime
 
 from app.application.interfaces import ITriageService
 from app.domain.entities import ClassificationResult, SpecialtyDefinition
@@ -29,6 +30,90 @@ def parse_json_from_llm(content: str | list) -> dict:
         return json.loads(text)
     except json.JSONDecodeError:
         return {}
+
+
+def _tool_success(**payload: object) -> str:
+    return json.dumps({"status": "success", **payload}, ensure_ascii=False)
+
+
+def _tool_error(code: str, message: str) -> str:
+    return json.dumps(
+        {"status": "error", "error": {"code": code, "message": message}},
+        ensure_ascii=False,
+    )
+
+
+def _resolve_thread_id(runtime: ToolRuntime | None) -> str:
+    if runtime is None:
+        return "default-thread"
+
+    config = getattr(runtime, "config", None) or {}
+    configurable = config.get("configurable", {}) if hasattr(config, "get") else {}
+    thread_id = configurable.get("thread_id")
+    return str(thread_id) if thread_id else "default-thread"
+
+
+def _sync_specialist_session(
+    thread_id: str,
+    conversation_summary: str,
+    result: ClassificationResult,
+    agent_b_status: str = "completed",
+) -> None:
+    from app.presentation.api.dependencies import _session_repo
+    from app.domain.entities import SpecialtyAssessment
+
+    session = _session_repo.get_session(thread_id)
+    if not session:
+        return
+
+    session.symptom_summary = conversation_summary
+    session.specialty_assessment = SpecialtyAssessment(
+        speciality_id=result.speciality_id,
+        speciality_name=result.speciality_name,
+        description=result.description,
+        confidence=result.confidence,
+        question=result.question,
+        matched_symptoms=list(result.matched_symptoms),
+        needs_more_info=result.needs_more_info,
+        warning_signs=list(result.warning_signs),
+        fallback_used=result.fallback_used,
+        agent_b_status=agent_b_status,
+    )
+
+    session.failure_state.last_error_code = None
+    if result.warning_signs:
+        session.conversation_state = "FALLBACK_SUPPORT"
+        session.pending_field = None
+        session.last_follow_up_question = None
+    elif result.needs_more_info and result.question:
+        session.conversation_state = "ASKING_FOLLOWUP"
+        session.pending_field = "follow_up_answer"
+        session.last_follow_up_question = result.question
+    else:
+        session.conversation_state = "SHOWING_SPECIALTY_RESULT"
+        session.pending_field = None
+        session.last_follow_up_question = None
+
+    if result.confidence > 0.7 and result.speciality_id is not None:
+        session.booking_context.speciality_id = result.speciality_id
+        session.booking_context.speciality_name = result.speciality_name
+
+    _session_repo.save_session(session)
+
+
+def _mark_specialist_error(thread_id: str, error_code: str, error_message: str) -> None:
+    from app.presentation.api.dependencies import _session_repo
+
+    session = _session_repo.get_session(thread_id)
+    if not session:
+        return
+
+    session.failure_state.agent_b_failures += 1
+    session.failure_state.last_error_code = error_code
+    session.conversation_state = "FALLBACK_SUPPORT"
+    session.specialty_assessment.agent_b_status = "error"
+    session.specialty_assessment.description = error_message
+    _session_repo.save_session(session)
 
 
 AMBIGUOUS_SINGLE_TOKEN_SYMPTOMS: frozenset[str] = frozenset({"ngay", "nam", "nu"})
@@ -123,6 +208,7 @@ class SpecialistAgent(ITriageService):
                 question="Bạn đau ở đâu?",
                 matched_symptoms=(),
                 fallback_used=True,
+                needs_more_info=True,
             )
 
         # 1. Trích xuất Knowledge Graph bằng LLM
@@ -215,6 +301,7 @@ class SpecialistAgent(ITriageService):
                 question="Bạn có thể nói rõ hơn không?",
                 matched_symptoms=(),
                 fallback_used=True,
+                needs_more_info=True,
             )
 
         # 6. Chuẩn bị kết quả từ LLM
@@ -227,6 +314,8 @@ class SpecialistAgent(ITriageService):
         
         questions = diag_data.get("follow_up_questions", [])
         first_q = questions[0].get("question") if questions else ("Bạn có biểu hiện nào khác không?" if diag_data.get("needs_more_info") else None)
+        warning_signs = tuple(str(item) for item in diag_data.get("warning_signs", [])[:3])
+        needs_more_info = bool(diag_data.get("needs_more_info") or first_q)
 
         return ClassificationResult(
             speciality_id=sp_id,
@@ -236,53 +325,43 @@ class SpecialistAgent(ITriageService):
             question=first_q,
             matched_symptoms=tuple(str(self.symptom_display.get(s, s)) for s in best_diag.get("matched_symptoms", [])[:3]),
             fallback_used=False,
+            needs_more_info=needs_more_info,
+            warning_signs=warning_signs,
         )
 
 
 from langchain_core.tools import tool
 
 @tool
-def specialist_agent_tool(conversation_summary: str, thread_id: str = "default-thread") -> str:
+def specialist_agent_tool(conversation_summary: str, runtime: ToolRuntime) -> str:
     """Gọi chuyên gia y tế (Agent B) để phân tích triệu chứng và gợi ý chuyên khoa.
     
     Hãy dùng tool này khi người dùng mô tả các triệu chứng bệnh và cần biết nên khám khoa nào.
     
     Args:
         conversation_summary: Tóm tắt các triệu chứng và tình trạng mà người dùng đã mô tả.
-        thread_id: ID của phiên chat (tự động lấy từ config nếu gọi trong LangGraph).
     """
-    from app.presentation.api.dependencies import _triage_service, _session_repo
-    from app.domain.entities import SpecialtyAssessment
+    from app.presentation.api.dependencies import _triage_service
     
-    result = _triage_service.classify_symptoms(conversation_summary)
-    
-    # Đồng bộ vào Session State để FE hiển thị bảng Summary
-    session = _session_repo.get_session(thread_id)
-    if session:
-        session.symptom_summary = conversation_summary
-        session.specialty_assessment = SpecialtyAssessment(
-            speciality_id=result.speciality_id,
-            speciality_name=result.speciality_name,
+    thread_id = _resolve_thread_id(runtime)
+
+    try:
+        result = _triage_service.classify_symptoms(conversation_summary)
+        _sync_specialist_session(thread_id, conversation_summary, result)
+
+        return _tool_success(
+            specialty_id=result.speciality_id,
+            specialty_name=result.speciality_name,
             description=result.description,
             confidence=result.confidence,
-            question=result.question,
             matched_symptoms=list(result.matched_symptoms),
+            question=result.question,
+            needs_more_info=result.needs_more_info,
+            warning_signs=list(result.warning_signs),
             fallback_used=result.fallback_used,
-            agent_b_status="completed"
+            agent_b_status="completed",
         )
-        # Tự động cập nhật chuyên khoa vào tiến độ đặt lịch nếu độ tin cậy cao
-        if result.confidence > 0.7:
-            session.booking_context.speciality_id = result.speciality_id
-            session.booking_context.speciality_name = result.speciality_name
-            
-        _session_repo.save_session(session)
-    
-    return json.dumps({
-        "specialty_name": result.speciality_name,
-        "description": result.description,
-        "confidence": result.confidence,
-        "matched_symptoms": result.matched_symptoms,
-        "question": result.question if result.confidence < 0.7 else None
-    }, ensure_ascii=False)
-
-
+    except Exception as exc:
+        error_code = "SPECIALIST_TOOL_ERROR"
+        _mark_specialist_error(thread_id, error_code, str(exc))
+        return _tool_error(error_code, str(exc))

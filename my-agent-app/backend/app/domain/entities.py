@@ -72,6 +72,8 @@ class ClassificationResult:
     question: str | None
     matched_symptoms: tuple[str, ...]
     fallback_used: bool
+    needs_more_info: bool = False
+    warning_signs: tuple[str, ...] = ()
 
 @dataclass
 class BookingContext:
@@ -104,6 +106,8 @@ class SpecialtyAssessment:
     confidence: float | None = None
     question: str | None = None
     matched_symptoms: list[str] = field(default_factory=list)
+    needs_more_info: bool = False
+    warning_signs: list[str] = field(default_factory=list)
     fallback_used: bool = False
     agent_b_status: str = "pending"
 

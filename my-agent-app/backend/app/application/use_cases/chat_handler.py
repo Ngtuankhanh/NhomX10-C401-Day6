@@ -67,6 +67,7 @@ class AgentAService:
 
         msg_text = message.strip()
         session.messages.append(ChatMessage(role="user", content=msg_text))
+        self.session_repo.save_session(session)
 
         # Gọi Agent A (Orchestrator) với session_id làm thread_id
         agent_response = run_agent(msg_text, thread_id=session_id)
