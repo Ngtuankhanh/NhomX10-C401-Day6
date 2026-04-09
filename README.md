@@ -18,7 +18,7 @@ Hồ sơ nộp bài chính thức được tổ chức như sau:
     *   `extras/screenshots/`: Ảnh chụp màn hình Prototype.
 *   **`personal/`**: Hồ sơ cá nhân của từng thành viên.
     *   `Nguyễn Tuấn Khanh/`: Reflection & Feedback.
-    *   `Cao Chí Hải/`: (Nhóm cần bổ sung bài của bạn Hải vào đây).
+    *   `Cao Chí Hải/`: Reflection & Feedback.
 *   **`my-agent-app/`**: Mã nguồn thực tế của Prototype.
 
 ---
