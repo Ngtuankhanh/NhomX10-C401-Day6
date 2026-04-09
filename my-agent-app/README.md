@@ -58,19 +58,19 @@ The frontend will be available at **http://localhost:3000** and will communicate
 | Method | Path             | Description              |
 |--------|------------------|--------------------------|
 | GET    | `/health`        | Health check             |
-| POST   | `/agent/invoke`  | Invoke the LangGraph agent |
+| POST   | `/api/chat/session` | Create a chat session |
+| POST   | `/api/chat/message` | Send a user message to the orchestrator |
+| GET    | `/api/evals/traces/{trace_id}` | Read one structured AI trace |
+| GET    | `/api/evals/sessions/{session_id}/latest-trace` | Read the latest trace for a session |
+| POST   | `/api/evals/judge` | Run the Judge Agent against a trace |
 
-### POST `/agent/invoke`
+## AI Evaluation Demo
 
-**Request:**
-```json
-{ "input": "What is the weather in Hanoi?" }
-```
+The backend now includes a small observability and evaluation pipeline for demo purposes:
 
-**Response:**
-```json
-{ "output": "..." }
-```
+- Structured AI traces are written to `backend/runtime/ai_request_traces.jsonl`
+- Judge results are written to `backend/runtime/ai_judge_results.jsonl`
+- Audit notes and rollout guidance live in `backend/docs/ai-eval-audit.md`
 
 ## Tech Stack
 

@@ -15,6 +15,12 @@ from langchain_core.messages import HumanMessage
 from pydantic import SecretStr
 
 from app.config import settings
+from app.observability.trace_runtime import (
+    AgentRunResult,
+    TraceCollector,
+    reset_current_trace_collector,
+    set_current_trace_collector,
+)
 from .prompts import Prompts
 
 # ---------------------------------------------------------------------------
@@ -22,7 +28,7 @@ from .prompts import Prompts
 # ---------------------------------------------------------------------------
 
 _llm = ChatOpenAI(
-    model="gpt-4o",
+    model=settings.agent_model,
     temperature=0,
     api_key=SecretStr(settings.openai_api_key) if settings.openai_api_key else None,
 )
@@ -36,7 +42,7 @@ from ..tools.booking_tools import (  # noqa: E402
     suggest_hospital_by_location_tool,
     create_booking_tool,
     confirm_booking_tool,
-    update_booking_field_tool
+    update_booking_field_tool,
 )
 
 # Extend this list to add LangChain tools to the ReAct agent
@@ -49,7 +55,7 @@ _tools: list = [
     suggest_hospital_by_location_tool,
     create_booking_tool,
     confirm_booking_tool,
-    update_booking_field_tool
+    update_booking_field_tool,
 ]
 
 _system_prompt = Prompts.MAIN_ORCHESTRATOR
@@ -59,20 +65,20 @@ _fallback_response = (
 )
 
 
-
 # Khởi tạo bộ nhớ cho Agent
 _memory = MemorySaver()
 
 # Tạo agent graph (LangGraph) sử dụng create_react_agent chuẩn
 agent_graph = create_react_agent(
-    _llm, 
-    tools=_tools, 
-    prompt=_system_prompt,
-    checkpointer=_memory
+    _llm, tools=_tools, prompt=_system_prompt, checkpointer=_memory
 )
 
 
-def run_agent(user_input: str, thread_id: str = "default-thread") -> str:
+def run_agent(
+    user_input: str,
+    thread_id: str = "default-thread",
+    conversation_state_before: str | None = None,
+) -> AgentRunResult:
     """Invoke the ReAct agent graph synchronously and return the final text.
 
     Parameters
@@ -84,12 +90,26 @@ def run_agent(user_input: str, thread_id: str = "default-thread") -> str:
 
     Returns
     -------
-    str
-        The agent's final response text, or an empty string on failure.
+    AgentRunResult
+        The agent's final response text plus a structured execution trace.
     """
+    collector = TraceCollector(
+        session_id=thread_id,
+        raw_prompt=user_input,
+        system_prompt_version=Prompts.MAIN_ORCHESTRATOR_VERSION,
+        conversation_state_before=conversation_state_before,
+    )
+    trace_token = set_current_trace_collector(collector)
+
     try:
-        config = {"configurable": {"thread_id": thread_id}}
-        result = agent_graph.invoke({"messages": [HumanMessage(content=user_input)]}, config=config)
+        config = {
+            "configurable": {"thread_id": thread_id},
+            "callbacks": [collector.callback_handler],
+        }
+        result = agent_graph.invoke(
+            {"messages": [HumanMessage(content=user_input)]},
+            config=config,
+        )
 
         # Lấy tin nhắn cuối cùng (thường là AIMessage chứa câu trả lời cuối)
         messages = result.get("messages", [])
@@ -97,14 +117,27 @@ def run_agent(user_input: str, thread_id: str = "default-thread") -> str:
             last_message = messages[-1]
             # AIMessage có thuộc tính .content
             if hasattr(last_message, "content"):
-                return str(last_message.content).strip()
+                content = str(last_message.content).strip()
+                return AgentRunResult(
+                    content=content, trace=collector.finalize(content)
+                )
             # Trường hợp fallback nếu là dict
             if isinstance(last_message, dict):
-                return str(last_message.get("content", "")).strip()
+                content = str(last_message.get("content", "")).strip()
+                return AgentRunResult(
+                    content=content, trace=collector.finalize(content)
+                )
 
-        return _fallback_response
+        return AgentRunResult(
+            content=_fallback_response,
+            trace=collector.finalize(_fallback_response),
+        )
 
     except Exception as e:
-        # Nên log lỗi ở production
-        print(f"Agent invocation error: {e}")
-        return _fallback_response
+        collector.record_error(str(e))
+        return AgentRunResult(
+            content=_fallback_response,
+            trace=collector.finalize(_fallback_response),
+        )
+    finally:
+        reset_current_trace_collector(trace_token)

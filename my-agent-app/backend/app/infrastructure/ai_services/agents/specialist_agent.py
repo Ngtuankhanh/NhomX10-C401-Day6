@@ -16,6 +16,7 @@ from langgraph.prebuilt import ToolRuntime
 
 from app.application.interfaces import ITriageService
 from app.domain.entities import ClassificationResult, SpecialtyDefinition
+from app.observability.trace_runtime import get_current_trace_collector
 from app.shared.text_utils import normalize_text
 from app.config import settings
 from .prompts import Prompts
@@ -155,7 +156,7 @@ class SpecialistAgent(ITriageService):
         self._load_kg(kg_path)
         
         self.llm = ChatOpenAI(
-            model="gpt-4o-mini",
+            model=settings.specialist_model,
             temperature=0,
             api_key=SecretStr(settings.openai_api_key) if settings.openai_api_key else None
         )
@@ -166,6 +167,12 @@ class SpecialistAgent(ITriageService):
         self.sorted_body_parts = sorted(
             self.body_part_to_diseases.keys(), key=lambda x: (-len(x), x)
         )
+
+    def _trace_config(self) -> dict | None:
+        collector = get_current_trace_collector()
+        if collector is None:
+            return None
+        return {"callbacks": [collector.callback_handler]}
 
     def _load_kg(self, kg_path: Path) -> None:
         if not kg_path.exists():
@@ -217,7 +224,13 @@ class SpecialistAgent(ITriageService):
             HumanMessage(content=f"Văn bản: {raw_text}")
         ]
         try:
-            kg_resp = self.llm.invoke(kg_messages)
+            collector = get_current_trace_collector()
+            if collector is not None:
+                collector.note_prompt_version(
+                    "specialist_kg_extraction",
+                    Prompts.KG_EXTRACTION_VERSION,
+                )
+            kg_resp = self.llm.invoke(kg_messages, config=self._trace_config())
             kg_ext = parse_json_from_llm(kg_resp.content)
         except Exception:
             kg_ext = {"nodes": [], "context": {}}
@@ -270,7 +283,13 @@ class SpecialistAgent(ITriageService):
             HumanMessage(content=json.dumps(user_msg, ensure_ascii=False, indent=2))
         ]
         try:
-            diag_resp = self.llm.invoke(diag_messages)
+            collector = get_current_trace_collector()
+            if collector is not None:
+                collector.note_prompt_version(
+                    "specialist_diagnosis",
+                    Prompts.DIAGNOSIS_VERSION,
+                )
+            diag_resp = self.llm.invoke(diag_messages, config=self._trace_config())
             diag_data = parse_json_from_llm(diag_resp.content)
         except Exception:
             diag_data = {}

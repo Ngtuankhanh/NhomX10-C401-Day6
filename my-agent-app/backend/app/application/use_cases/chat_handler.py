@@ -10,6 +10,7 @@ from app.application.interfaces import (
     ITriageService,
 )
 from app.domain.entities import SessionState, ChatMessage, StatusCode
+from app.observability.trace_store import AsyncJsonlTraceStore
 from app.infrastructure.ai_services.agents.agent import run_agent
 
 
@@ -41,11 +42,13 @@ class AgentAService:
         data_repo: IDataRepository,
         booking_repo: IBookingRepository,
         triage_service: ITriageService,
+        trace_store: AsyncJsonlTraceStore | None = None,
     ) -> None:
         self.session_repo = session_repo
         self.data_repo = data_repo
         self.booking_repo = booking_repo
         self.triage_service = triage_service
+        self.trace_store = trace_store
 
     def create_session(self) -> dict[str, Any]:
         session = SessionState(session_id=str(uuid4()))
@@ -70,10 +73,22 @@ class AgentAService:
         self.session_repo.save_session(session)
 
         # Gọi Agent A (Orchestrator) với session_id làm thread_id
-        agent_response = run_agent(msg_text, thread_id=session_id)
-
+        agent_result = run_agent(
+            msg_text,
+            thread_id=session_id,
+            conversation_state_before=session.conversation_state,
+        )
+        session = self.session_repo.get_session(session_id) or session
         self.session_repo.save_session(session)
-        return self._respond(session, agent_response)
+        response = self._respond(
+            session,
+            agent_result.content,
+            trace_id=agent_result.trace.trace_id,
+        )
+        agent_result.trace.conversation_state_after = session.conversation_state
+        if self.trace_store is not None:
+            self.trace_store.append_trace(agent_result.trace)
+        return response
 
     def _respond(
         self,
@@ -81,6 +96,7 @@ class AgentAService:
         content: str,
         replies: list[str] | None = None,
         status: StatusCode = "idle",
+        trace_id: str | None = None,
     ) -> dict[str, Any]:
         session.quick_replies = replies or []
         session.current_status = status
@@ -97,4 +113,5 @@ class AgentAService:
             "status": {"code": status, "label": booking_status_label(status)},
             "quick_replies": session.quick_replies,
             "snapshot": asdict(session),
+            "trace_id": trace_id,
         }
